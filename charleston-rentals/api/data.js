@@ -1,10 +1,19 @@
-import { Redis } from '@upstash/redis';
+import { createClient } from 'redis';
 
-// Handles both Vercel Marketplace (KV_*) and direct Upstash (UPSTASH_*) env var naming
-const redis = new Redis({
-  url: process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL,
-  token: process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN,
-});
+// Cache the client across warm invocations to avoid reconnecting every call
+let clientPromise = null;
+function getClient() {
+  if (!clientPromise) {
+    const url = process.env.REDIS_URL || process.env.KV_URL;
+    const client = createClient({ url });
+    client.on('error', (err) => console.error('Redis client error:', err));
+    clientPromise = client.connect().then(() => client).catch((err) => {
+      clientPromise = null; // allow retry on next invocation
+      throw err;
+    });
+  }
+  return clientPromise;
+}
 
 const KEY = 'charleston_rentals_v2';
 
@@ -44,13 +53,15 @@ export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
 
   try {
+    const redis = await getClient();
+
     if (req.method === 'GET') {
-      let data = await redis.get(KEY);
-      if (!data) {
-        await redis.set(KEY, SEED);
-        data = SEED;
+      const raw = await redis.get(KEY);
+      if (!raw) {
+        await redis.set(KEY, JSON.stringify(SEED));
+        return res.status(200).json(SEED);
       }
-      return res.status(200).json(data);
+      return res.status(200).json(JSON.parse(raw));
     }
 
     if (req.method === 'POST') {
@@ -58,7 +69,7 @@ export default async function handler(req, res) {
       if (!body || !Array.isArray(body.properties)) {
         return res.status(400).json({ error: 'Invalid payload — missing properties array' });
       }
-      await redis.set(KEY, body);
+      await redis.set(KEY, JSON.stringify(body));
       return res.status(200).json({ ok: true });
     }
 
