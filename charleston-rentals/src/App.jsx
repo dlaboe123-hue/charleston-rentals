@@ -31,6 +31,18 @@ const STATUS_TINT = {
   '✨ New - not contacted': 'bg-blue-50 text-blue-900 border-blue-200',
 };
 
+// Tour weekend: Saturday 5/23 and Sunday 5/24, 2026
+const TOUR_DAYS = [
+  { date: '2026-05-23', short: 'Sat 5/23', label: 'Saturday', long: 'Saturday, May 23' },
+  { date: '2026-05-24', short: 'Sun 5/24', label: 'Sunday', long: 'Sunday, May 24' },
+];
+const DEFAULT_TOUR_DATE = '2026-05-23';
+// Day metadata for a property's tourDate (falls back to Saturday for legacy rows)
+const tourDayMeta = (date) => TOUR_DAYS.find((d) => d.date === date) || TOUR_DAYS[0];
+// A property belongs to a tour day if it has a tourDate; legacy rows with only a
+// tourTime are treated as Saturday so nothing scheduled disappears.
+const effectiveTourDate = (p) => p.tourDate || (p.tourTime ? DEFAULT_TOUR_DATE : null);
+
 
 // ============== Helpers ==============
 const fmtRent = (r) => {
@@ -54,6 +66,13 @@ const pricePerSqft = (rent, sqft) => {
 const mapsForAddress = (addr) => {
   const q = encodeURIComponent(`${addr}, Charleston, SC`);
   return `https://www.google.com/maps/search/?api=1&query=${q}`;
+};
+// Google Street View Static image of the building (set VITE_GOOGLE_MAPS_API_KEY to enable)
+const GMAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
+const streetViewUrl = (addr, w = 640, h = 360) => {
+  if (!GMAPS_KEY || !addr) return null;
+  const loc = encodeURIComponent(`${addr}, Charleston, SC`);
+  return `https://maps.googleapis.com/maps/api/streetview?size=${w}x${h}&location=${loc}&fov=80&source=outdoor&key=${GMAPS_KEY}`;
 };
 const tourTimeToMinutes = (t) => {
   if (!t || t === 'TBD') return 99999;
@@ -79,8 +98,49 @@ const buildRouteUrl = (tourProps) => {
   if (waypoints) url += `&waypoints=${waypoints}`;
   return url;
 };
+// Interactive embedded map (Maps Embed API). Directions route for 2+ timed
+// stops, a single place pin for one, null when there's nothing to plot.
+const addrParam = (p) => encodeURIComponent(`${p.addressFull || p.address}, Charleston, SC`);
+const placeEmbedUrl = (addr) => GMAPS_KEY ? `https://www.google.com/maps/embed/v1/place?key=${GMAPS_KEY}&q=${encodeURIComponent(`${addr}, Charleston, SC`)}` : null;
+const routeEmbedUrl = (tourProps) => {
+  if (!GMAPS_KEY) return null;
+  const stops = [...tourProps]
+    .filter((p) => p.tourTime && p.tourTime !== 'TBD')
+    .sort((a, b) => tourTimeToMinutes(a.tourTime) - tourTimeToMinutes(b.tourTime));
+  if (stops.length === 0) return null;
+  if (stops.length === 1) return `https://www.google.com/maps/embed/v1/place?key=${GMAPS_KEY}&q=${addrParam(stops[0])}`;
+  const origin = addrParam(stops[0]);
+  const destination = addrParam(stops[stops.length - 1]);
+  const waypoints = stops.slice(1, -1).map(addrParam).join('|');
+  let url = `https://www.google.com/maps/embed/v1/directions?key=${GMAPS_KEY}&origin=${origin}&destination=${destination}&mode=driving`;
+  if (waypoints) url += `&waypoints=${waypoints}`;
+  return url;
+};
 
 // ============== UI Components ==============
+// Street View photo of the building, with a graceful placeholder when there's
+// no API key or Google has no imagery for the address.
+function PropertyPhoto({ p, w, h, className = '' }) {
+  const url = streetViewUrl(p.addressFull || p.address, w, h);
+  const [failed, setFailed] = useState(false);
+  if (!url || failed) {
+    return (
+      <div className={`flex items-center justify-center bg-stone-200/70 text-stone-400 ${className}`}>
+        <Home size={26} strokeWidth={1.5} />
+      </div>
+    );
+  }
+  return (
+    <img
+      src={url}
+      alt={`Street view of ${p.address}`}
+      loading="lazy"
+      onError={() => setFailed(true)}
+      className={`object-cover bg-stone-200 ${className}`}
+    />
+  );
+}
+
 function StarRow({ value, onChange, person, color }) {
   return (
     <div className="flex items-center gap-1.5">
@@ -145,7 +205,10 @@ function PropertyCard({ p, onUpdate, onOpen }) {
       onClick={() => onOpen(p.id)}
       className="bg-[#FAF6EE] border border-stone-300/60 hover:border-[#A14B3B]/40 hover:shadow-md transition-all rounded-lg p-4 cursor-pointer relative"
     >
-      {verdictDot && <div className={`absolute top-3 right-3 w-2.5 h-2.5 rounded-full ${verdictDot}`} />}
+      <div className="-mx-4 -mt-4 mb-3 h-36 overflow-hidden rounded-t-lg">
+        <PropertyPhoto p={p} w={640} h={300} className="w-full h-full" />
+      </div>
+      {verdictDot && <div className={`absolute top-3 right-3 w-2.5 h-2.5 rounded-full ring-2 ring-white shadow ${verdictDot}`} />}
       <div className="flex justify-between items-start mb-2 gap-2">
         <div className="flex-1 min-w-0">
           <h3 className="font-display text-[19px] leading-tight text-stone-900 truncate">{p.address}</h3>
@@ -177,7 +240,7 @@ function PropertyCard({ p, onUpdate, onOpen }) {
       {p.tourTime && (
         <div className="flex items-center gap-1.5 mb-3 text-[12px] text-emerald-800 bg-emerald-50/70 border border-emerald-200/60 px-2 py-1 rounded">
           <Clock size={12} />
-          <span className="font-medium">Sat 5/23</span>
+          <span className="font-medium">{tourDayMeta(p.tourDate).short}</span>
           <span>·</span>
           <span>{p.tourTime}</span>
         </div>
@@ -244,6 +307,11 @@ function PropertyModal({ p, onClose, onUpdate, onDelete }) {
         <div className="p-5 space-y-5">
           {!editing && (
             <>
+              {streetViewUrl(p.addressFull || p.address) && (
+                <div className="-mx-5 -mt-5 mb-1 h-52 overflow-hidden">
+                  <PropertyPhoto p={p} w={900} h={400} className="w-full h-full" />
+                </div>
+              )}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div>
                   <div className="text-[10px] uppercase tracking-[0.15em] text-stone-500">Rent</div>
@@ -272,7 +340,7 @@ function PropertyModal({ p, onClose, onUpdate, onDelete }) {
               {p.tourTime && (
                 <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
                   <div className="text-[10px] uppercase tracking-[0.15em] text-emerald-700 font-medium mb-1">Tour Scheduled</div>
-                  <div className="font-display text-lg text-emerald-900">Saturday 5/23 · {p.tourTime}</div>
+                  <div className="font-display text-lg text-emerald-900">{tourDayMeta(p.tourDate).long} · {p.tourTime}</div>
                 </div>
               )}
 
@@ -305,6 +373,20 @@ function PropertyModal({ p, onClose, onUpdate, onDelete }) {
                   </a>
                 )}
               </div>
+
+              {placeEmbedUrl(p.addressFull || p.address) && (
+                <div className="rounded-lg overflow-hidden border border-stone-300/60 bg-stone-200">
+                  <iframe
+                    title={`Map of ${p.address}`}
+                    src={placeEmbedUrl(p.addressFull || p.address)}
+                    className="w-full h-56 block"
+                    style={{ border: 0 }}
+                    loading="lazy"
+                    allowFullScreen
+                    referrerPolicy="no-referrer-when-downgrade"
+                  />
+                </div>
+              )}
 
               {(p.contact || p.contactInfo) && (
                 <div>
@@ -403,6 +485,17 @@ function PropertyModal({ p, onClose, onUpdate, onDelete }) {
                   />
                 </div>
               ))}
+              <div>
+                <label className="text-xs text-stone-600 mb-1 block">Tour day</label>
+                <select
+                  value={draft.tourDate || ''}
+                  onChange={(e) => setDraft({ ...draft, tourDate: e.target.value || null })}
+                  className="w-full bg-white border border-stone-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-[#A14B3B]"
+                >
+                  <option value="">No tour scheduled</option>
+                  {TOUR_DAYS.map((d) => <option key={d.date} value={d.date}>{d.long}</option>)}
+                </select>
+              </div>
               <div>
                 <label className="text-xs text-stone-600 mb-1 block">Status</label>
                 <select
@@ -536,22 +629,56 @@ function AddPropertyModal({ onClose, onAdd }) {
 }
 
 function TourDayView({ properties, onOpen }) {
-  const tours = useMemo(() => {
-    return properties
-      .filter((p) => p.tourDate === '2026-05-23' || p.tourTime)
-      .sort((a, b) => tourTimeToMinutes(a.tourTime) - tourTimeToMinutes(b.tourTime));
+  const [selectedDay, setSelectedDay] = useState(DEFAULT_TOUR_DATE);
+
+  // Group every scheduled property by its tour day, sorted by time within each day
+  const byDay = useMemo(() => {
+    const map = {};
+    for (const d of TOUR_DAYS) map[d.date] = [];
+    for (const p of properties) {
+      const date = effectiveTourDate(p);
+      if (date && map[date]) map[date].push(p);
+    }
+    for (const date of Object.keys(map)) {
+      map[date].sort((a, b) => tourTimeToMinutes(a.tourTime) - tourTimeToMinutes(b.tourTime));
+    }
+    return map;
   }, [properties]);
 
+  const tours = byDay[selectedDay] || [];
+  const dayMeta = tourDayMeta(selectedDay);
   const routeUrl = buildRouteUrl(tours.filter((t) => t.tourTime && t.tourTime !== 'TBD'));
+  const routeMap = routeEmbedUrl(tours);
   const confirmed = tours.filter((t) => t.status === '✅ Tour CONFIRMED').length;
   const pending = tours.filter((t) => t.status?.includes('pending') || t.status?.includes('action needed')).length;
 
   return (
     <div className="space-y-4">
+      <div className="flex gap-1.5 bg-[#FAF6EE] border border-stone-300/60 rounded-lg p-1">
+        {TOUR_DAYS.map((d) => {
+          const count = (byDay[d.date] || []).length;
+          const active = selectedDay === d.date;
+          return (
+            <button
+              key={d.date}
+              onClick={() => setSelectedDay(d.date)}
+              className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition ${
+                active ? 'bg-stone-900 text-[#F5EFE6]' : 'text-stone-600 hover:bg-stone-200/60'
+              }`}
+            >
+              {d.long}
+              <span className={`text-[11px] rounded-full px-1.5 py-0.5 leading-none ${active ? 'bg-[#A14B3B] text-white' : 'bg-stone-300/70 text-stone-700'}`}>
+                {count}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
       <div className="bg-stone-900 text-[#F5EFE6] rounded-xl p-5 sm:p-6 relative overflow-hidden">
         <div className="absolute top-0 right-0 w-64 h-64 bg-[#A14B3B]/20 rounded-full -translate-y-32 translate-x-32 blur-3xl" />
         <div className="relative">
-          <div className="text-[11px] uppercase tracking-[0.25em] text-[#A14B3B] mb-2 font-medium">Saturday, May 23 · 2026</div>
+          <div className="text-[11px] uppercase tracking-[0.25em] text-[#A14B3B] mb-2 font-medium">{dayMeta.long} · 2026</div>
           <h2 className="font-display text-3xl sm:text-4xl mb-3 leading-tight">Tour Day</h2>
           <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm text-stone-300 mb-5">
             <span><span className="text-emerald-400 font-medium">{confirmed}</span> confirmed</span>
@@ -566,23 +693,43 @@ function TourDayView({ properties, onOpen }) {
               className="inline-flex items-center gap-2 bg-[#A14B3B] hover:bg-[#8a3e30] text-[#F5EFE6] px-5 py-2.5 rounded-lg font-medium text-sm transition"
             >
               <Navigation size={16} />
-              Route All Stops in Google Maps
+              Route {dayMeta.label}'s Stops in Google Maps
               <ExternalLink size={13} className="opacity-70" />
             </a>
           )}
         </div>
       </div>
 
+      {routeMap && (
+        <div className="rounded-xl overflow-hidden border border-stone-300/60 shadow-sm bg-stone-200">
+          <iframe
+            title={`${dayMeta.label} tour route`}
+            src={routeMap}
+            className="w-full h-72 sm:h-96 block"
+            style={{ border: 0 }}
+            loading="lazy"
+            allowFullScreen
+            referrerPolicy="no-referrer-when-downgrade"
+          />
+        </div>
+      )}
+
+      {tours.length === 0 ? (
+        <div className="text-center py-12 text-stone-500">No tours scheduled for {dayMeta.label} yet.</div>
+      ) : (
       <div className="space-y-3">
         {tours.map((p) => (
           <div
             key={p.id}
             onClick={() => onOpen(p.id)}
-            className="bg-[#FAF6EE] border border-stone-300/60 hover:border-[#A14B3B]/40 hover:shadow-md transition rounded-lg p-4 cursor-pointer flex gap-4 items-start"
+            className="bg-[#FAF6EE] border border-stone-300/60 hover:border-[#A14B3B]/40 hover:shadow-md transition rounded-lg p-4 cursor-pointer flex gap-3 sm:gap-4 items-start"
           >
-            <div className="text-center w-20 flex-shrink-0">
-              <div className="font-display text-lg text-[#A14B3B] font-medium leading-tight">{p.tourTime || 'TBD'}</div>
-              <div className="text-[10px] uppercase tracking-wider text-stone-500 mt-0.5">Sat 5/23</div>
+            <div className="text-center w-14 sm:w-20 flex-shrink-0">
+              <div className="font-display text-base sm:text-lg text-[#A14B3B] font-medium leading-tight">{p.tourTime || 'TBD'}</div>
+              <div className="text-[10px] uppercase tracking-wider text-stone-500 mt-0.5">{tourDayMeta(p.tourDate).short}</div>
+            </div>
+            <div className="w-16 h-16 sm:w-20 sm:h-20 flex-shrink-0 overflow-hidden rounded-md">
+              <PropertyPhoto p={p} w={160} h={160} className="w-full h-full" />
             </div>
             <div className="flex-1 min-w-0">
               <h3 className="font-display text-lg text-stone-900 truncate">{p.address}</h3>
@@ -629,6 +776,7 @@ function TourDayView({ properties, onOpen }) {
           </div>
         ))}
       </div>
+      )}
     </div>
   );
 }

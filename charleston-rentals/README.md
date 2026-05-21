@@ -40,6 +40,22 @@ Status indicator under the title:
 - 🟡 **Syncing…** — write in flight
 - 🔴 **Offline** — network or server failure (still works locally, cached copy)
 
+## Tour days
+
+The tour weekend is **Saturday 5/23** and **Sunday 5/24, 2026**. The **Tour Day** tab has a Sat/Sun toggle (each showing a stop count); the header, stats, and "Route … Stops" button all reflect the selected day. Assign a property to a day in its **Details → Edit → Tour day** dropdown (writes the `tourDate` field, `2026-05-23` or `2026-05-24`). Properties with a tour time but no day are treated as Saturday.
+
+## Photos (Google Street View)
+
+Each tile and the detail modal show a Google Street View image of the building, looked up from its address. To enable:
+
+1. In Google Cloud Console, create an API key and enable the **Street View Static API** (tile/modal photos) and the **Maps Embed API** (the interactive route map in Tour Day + the location map in each property's detail). For local dev, leave the key unrestricted or add `http://localhost:*` to the allowed HTTP referrers.
+2. Restrict the key by **HTTP referrer** to your Vercel domain (the key ships in client-side JS, so referrer restriction is what protects it).
+3. Set the env var **`VITE_GOOGLE_MAPS_API_KEY`**:
+   - **Vercel**: Project → Settings → Environment Variables → add `VITE_GOOGLE_MAPS_API_KEY`, then redeploy.
+   - **Local**: add `VITE_GOOGLE_MAPS_API_KEY=...` to `.env.local`.
+
+Without the key (or where Google has no imagery / a unit isn't street-facing), the tile shows a clean house-icon placeholder. Street View shows the building exterior — not the specific unit interior.
+
 ## Local dev
 
 ```bash
