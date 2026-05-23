@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   Star, Plus, X, Navigation, Phone, Mail, Filter, Trash2, Edit3,
-  Clock, Calendar, Home, ExternalLink, RefreshCw,
+  Clock, Calendar, Home, ExternalLink, RefreshCw, MapPin,
 } from 'lucide-react';
 
 const API_URL = '/api/data';
@@ -89,12 +89,12 @@ const buildRouteUrl = (tourProps) => {
   const sorted = [...tourProps].sort((a, b) => tourTimeToMinutes(a.tourTime) - tourTimeToMinutes(b.tourTime));
   const addrs = sorted.map((p) => encodeURIComponent(`${p.addressFull || p.address}, Charleston, SC`));
   if (addrs.length === 1) {
-    return `https://www.google.com/maps/dir/?api=1&destination=${addrs[0]}&travelmode=driving`;
+    return `https://www.google.com/maps/dir/?api=1&destination=${addrs[0]}&travelmode=walking`;
   }
   const origin = addrs[0];
   const destination = addrs[addrs.length - 1];
   const waypoints = addrs.slice(1, -1).join('|');
-  let url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`;
+  let url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=walking`;
   if (waypoints) url += `&waypoints=${waypoints}`;
   return url;
 };
@@ -102,20 +102,69 @@ const buildRouteUrl = (tourProps) => {
 // stops, a single place pin for one, null when there's nothing to plot.
 const addrParam = (p) => encodeURIComponent(`${p.addressFull || p.address}, Charleston, SC`);
 const placeEmbedUrl = (addr) => GMAPS_KEY ? `https://www.google.com/maps/embed/v1/place?key=${GMAPS_KEY}&q=${encodeURIComponent(`${addr}, Charleston, SC`)}` : null;
-const routeEmbedUrl = (tourProps) => {
+// Walking route through the day's timed stops. When `origin` (a "lat,lng" from
+// the user's live location) is given, the path starts from there and threads
+// through every remaining stop in time order — so it tracks where you are and
+// what's next. Otherwise it shows the full stop-to-stop walking path.
+const routeEmbedUrl = (tourProps, origin = null) => {
   if (!GMAPS_KEY) return null;
   const stops = [...tourProps]
     .filter((p) => p.tourTime && p.tourTime !== 'TBD')
     .sort((a, b) => tourTimeToMinutes(a.tourTime) - tourTimeToMinutes(b.tourTime));
-  if (stops.length === 0) return null;
-  if (stops.length === 1) return `https://www.google.com/maps/embed/v1/place?key=${GMAPS_KEY}&q=${addrParam(stops[0])}`;
-  const origin = addrParam(stops[0]);
-  const destination = addrParam(stops[stops.length - 1]);
-  const waypoints = stops.slice(1, -1).map(addrParam).join('|');
-  let url = `https://www.google.com/maps/embed/v1/directions?key=${GMAPS_KEY}&origin=${origin}&destination=${destination}&mode=driving`;
+  if (stops.length === 0) {
+    return origin ? `https://www.google.com/maps/embed/v1/view?key=${GMAPS_KEY}&center=${encodeURIComponent(origin)}&zoom=15` : null;
+  }
+  const pts = stops.map(addrParam);
+  const base = `https://www.google.com/maps/embed/v1/directions?key=${GMAPS_KEY}&mode=walking`;
+  if (origin) {
+    const destination = pts[pts.length - 1];
+    const waypoints = pts.slice(0, -1).join('|');
+    let url = `${base}&origin=${encodeURIComponent(origin)}&destination=${destination}`;
+    if (waypoints) url += `&waypoints=${waypoints}`;
+    return url;
+  }
+  if (stops.length === 1) return `https://www.google.com/maps/embed/v1/place?key=${GMAPS_KEY}&q=${pts[0]}`;
+  const destination = pts[pts.length - 1];
+  const waypoints = pts.slice(1, -1).join('|');
+  let url = `${base}&origin=${pts[0]}&destination=${destination}`;
   if (waypoints) url += `&waypoints=${waypoints}`;
   return url;
 };
+// Real Zillow listing URLs from the source tracker spreadsheet, keyed by property id.
+// Backfills the 24 seeded properties (whose live records predate the zillowUrl field).
+const ZILLOW_LINKS = {
+  p1: 'https://www.zillow.com/homedetails/72-Logan-St-Charleston-SC-29401/10903769_zpid/',
+  p2: 'https://www.zillow.com/homedetails/20-Limehouse-St-AA-Charleston-SC-29401/2065582515_zpid/',
+  p3: 'https://www.zillow.com/apartments/charleston-sc/28-broad-street/9Bn2Vw/',
+  p4: 'https://www.zillow.com/homedetails/21-George-St-APT-403-Charleston-SC-29401/88975939_zpid/',
+  p5: 'https://www.zillow.com/apartments/charleston-sc/655-east-bay/CkBRrD/',
+  p6: 'https://www.zillow.com/homedetails/5-Gadsdenboro-St-UNIT-411-Charleston-SC-29401/333564598_zpid/',
+  p7: 'https://www.zillow.com/homedetails/70-Carolina-St-301-Charleston-SC-29403/456567473_zpid/',
+  p8: 'https://www.zillow.com/homedetails/69-Morris-St-APT-202-Charleston-SC-29403/92383626_zpid/',
+  p9: 'https://www.zillow.com/homedetails/1-Vendue-Range-36D-Charleston-SC-29401/2054436696_zpid/',
+  p10: 'https://www.zillow.com/homedetails/31-Wentworth-St-Charleston-SC-29401/10905058_zpid/',
+  p11: 'https://www.zillow.com/apartments/charleston-sc/society-at-laurens/BMtN2x/',
+  p12: 'https://www.zillow.com/homedetails/35-Society-St-1-Charleston-SC-29401/10904952_zpid/',
+  p13: 'https://www.zillow.com/homedetails/33-Calhoun-St-Charleston-SC-29401/82543675_zpid/',
+  p14: 'https://www.zillow.com/homedetails/349-King-St-Charleston-SC-29401/2091226206_zpid/',
+  p15: 'https://www.zillow.com/homedetails/164-Queen-St-Charleston-SC-29401/10903653_zpid/',
+  p16: 'https://www.zillow.com/homedetails/55-Hasell-St-APT-A-Charleston-SC-29401/10905030_zpid/',
+  p17: 'https://www.zillow.com/homedetails/94-Bogard-St-Charleston-SC-29403/10907350_zpid/',
+  p18: 'https://www.zillow.com/apartments/charleston-sc/the-charleigh/5XqvtD/',
+  p19: 'https://www.zillow.com/apartments/charleston-sc/laurel-a-collective/CqHxPt/',
+  p20: 'https://www.zillow.com/homedetails/234-Ashley-Ave-A-Charleston-SC-29403/2067011147_zpid/',
+  p21: 'https://www.zillow.com/homedetails/19-N-Tracy-St-Charleston-SC-29403/10906650_zpid/',
+  p22: 'https://www.zillow.com/homedetails/32-H-St-Charleston-SC-29403/10910507_zpid/',
+  p23: 'https://www.zillow.com/homedetails/278-King-St-C-1-Charleston-SC-29401/455720165_zpid/',
+  p24: 'https://www.zillow.com/b/lease-only-235-king-street-charleston-sc-5jC4WR/',
+};
+// Zillow link: the property's own saved URL wins, then the known listing for a
+// seeded property, then a Zillow search for the address as a last resort.
+const zillowUrlFor = (p) =>
+  (p.zillowUrl && p.zillowUrl.trim())
+    ? p.zillowUrl.trim()
+    : (ZILLOW_LINKS[p.id]
+        || `https://www.zillow.com/homes/${encodeURIComponent(`${p.addressFull || p.address}, Charleston, SC`)}_rb/`);
 
 // ============== UI Components ==============
 // Street View photo of the building, with a graceful placeholder when there's
@@ -354,6 +403,17 @@ function PropertyModal({ p, onClose, onUpdate, onDelete }) {
                   <Navigation size={15} />
                   Google Maps
                 </a>
+                <a
+                  href={zillowUrlFor(p)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 bg-[#006AFF] text-white px-4 py-2 rounded-lg text-sm hover:bg-[#0055cc] transition"
+                  title={(p.zillowUrl || ZILLOW_LINKS[p.id]) ? 'Open the Zillow listing' : 'Search this address on Zillow'}
+                >
+                  <Home size={15} />
+                  Zillow
+                  <ExternalLink size={12} className="opacity-70" />
+                </a>
                 {p.contactInfo?.includes('@') && (
                   <a
                     href={`mailto:${p.contactInfo.match(/[\w.+-]+@[\w-]+\.[\w.-]+/)?.[0] || ''}`}
@@ -474,6 +534,7 @@ function PropertyModal({ p, onClose, onUpdate, onDelete }) {
                 { k: 'contactInfo', label: 'Contact info' },
                 { k: 'nextStep', label: 'Next step' },
                 { k: 'tourTime', label: 'Tour time (e.g. "11:15 AM" or "TBD")' },
+                { k: 'zillowUrl', label: 'Zillow listing URL (optional)' },
               ].map(({ k, label, type }) => (
                 <div key={k}>
                   <label className="text-xs text-stone-600 mb-1 block">{label}</label>
@@ -630,6 +691,33 @@ function AddPropertyModal({ onClose, onAdd }) {
 
 function TourDayView({ properties, onOpen }) {
   const [selectedDay, setSelectedDay] = useState(DEFAULT_TOUR_DATE);
+  const [tracking, setTracking] = useState(false);
+  const [myLoc, setMyLoc] = useState(null); // "lat,lng" from geolocation
+  const [geoError, setGeoError] = useState('');
+
+  // Live location: while tracking, follow the user and update the route origin,
+  // but only when they've moved enough (~30m) so the map isn't constantly reloading.
+  useEffect(() => {
+    if (!tracking) { setMyLoc(null); setGeoError(''); return; }
+    if (!('geolocation' in navigator)) { setGeoError('Location not supported on this device'); return; }
+    const id = navigator.geolocation.watchPosition(
+      (pos) => {
+        setGeoError('');
+        const next = `${pos.coords.latitude.toFixed(5)},${pos.coords.longitude.toFixed(5)}`;
+        setMyLoc((prev) => {
+          if (!prev) return next;
+          const [pa, pb] = prev.split(',').map(Number);
+          const [na, nb] = next.split(',').map(Number);
+          const dLat = (na - pa) * 111000;
+          const dLng = (nb - pb) * 111000 * Math.cos((pa * Math.PI) / 180);
+          return Math.hypot(dLat, dLng) > 30 ? next : prev;
+        });
+      },
+      (err) => setGeoError(err.code === 1 ? 'Location permission denied' : (err.message || 'Location unavailable')),
+      { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
+    );
+    return () => navigator.geolocation.clearWatch(id);
+  }, [tracking]);
 
   // Group every scheduled property by its tour day, sorted by time within each day
   const byDay = useMemo(() => {
@@ -648,7 +736,7 @@ function TourDayView({ properties, onOpen }) {
   const tours = byDay[selectedDay] || [];
   const dayMeta = tourDayMeta(selectedDay);
   const routeUrl = buildRouteUrl(tours.filter((t) => t.tourTime && t.tourTime !== 'TBD'));
-  const routeMap = routeEmbedUrl(tours);
+  const routeMap = routeEmbedUrl(tours, tracking ? myLoc : null);
   const confirmed = tours.filter((t) => t.status === '✅ Tour CONFIRMED').length;
   const pending = tours.filter((t) => t.status?.includes('pending') || t.status?.includes('action needed')).length;
 
@@ -693,7 +781,7 @@ function TourDayView({ properties, onOpen }) {
               className="inline-flex items-center gap-2 bg-[#A14B3B] hover:bg-[#8a3e30] text-[#F5EFE6] px-5 py-2.5 rounded-lg font-medium text-sm transition"
             >
               <Navigation size={16} />
-              Route {dayMeta.label}'s Stops in Google Maps
+              Walk {dayMeta.label}'s Route in Google Maps
               <ExternalLink size={13} className="opacity-70" />
             </a>
           )}
@@ -702,6 +790,23 @@ function TourDayView({ properties, onOpen }) {
 
       {routeMap && (
         <div className="rounded-xl overflow-hidden border border-stone-300/60 shadow-sm bg-stone-200">
+          <div className="flex items-center justify-between gap-2 px-3 py-2 bg-[#FAF6EE] border-b border-stone-300/60">
+            <div className="text-[12px] text-stone-600 min-w-0 truncate">
+              {tracking && myLoc
+                ? `Walking from your location through ${dayMeta.label}'s stops`
+                : `${dayMeta.label}'s full walking route`}
+            </div>
+            <button
+              onClick={() => setTracking((t) => !t)}
+              className={`flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium border transition ${
+                tracking ? 'bg-[#A14B3B] text-[#F5EFE6] border-[#A14B3B]' : 'bg-white text-stone-700 border-stone-300 hover:bg-stone-100'
+              }`}
+              title="Use your live location as the route's starting point"
+            >
+              <MapPin size={13} className={tracking && !myLoc ? 'animate-pulse' : ''} />
+              {tracking ? (myLoc ? 'Tracking you' : 'Locating…') : 'Track me'}
+            </button>
+          </div>
           <iframe
             title={`${dayMeta.label} tour route`}
             src={routeMap}
@@ -711,6 +816,9 @@ function TourDayView({ properties, onOpen }) {
             allowFullScreen
             referrerPolicy="no-referrer-when-downgrade"
           />
+          {geoError && (
+            <div className="px-3 py-1.5 text-[11px] text-red-700 bg-red-50 border-t border-red-200">{geoError}</div>
+          )}
         </div>
       )}
 
